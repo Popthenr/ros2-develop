@@ -1,7 +1,0 @@
-Metadata-Version: 2.1
-Name: my-ros2-pkg
-Version: 0.0.0
-Summary: ROS 2 publisher and subscriber assignment
-Maintainer: ubuntu
-Maintainer-email: ubuntu@todo.todo
-License: Apache-2.0
