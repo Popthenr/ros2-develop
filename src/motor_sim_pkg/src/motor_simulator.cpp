@@ -103,6 +103,14 @@ private:
 
         // 积分得到角速度
         omega_ += omega_dot * dt;
+        if (omega_ >100.0)
+        {
+            omega_ =100.0;
+        }
+        else if (omega_ < -100.0)
+        {
+            omega_ = -100.0;
+        }
 
         // 积分得到角度
         theta_ += omega_ * dt;
