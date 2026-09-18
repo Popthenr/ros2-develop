@@ -1,6 +1,5 @@
 #include <chrono>
 #include <memory>
-#include <functional>
 
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/float64.hpp"
@@ -14,90 +13,78 @@ public:
         : Node("torque_source"),
           elapsed_time_(0.0)
     {
-        // ==============================
         // 发布控制力矩
-        // ==============================
-        torque_publisher_ =
-            this->create_publisher<std_msgs::msg::Float64>(
-                "motor_torque",
-                10);
+        torque_pub_ = this->create_publisher<std_msgs::msg::Float64>(
+            "/motor_torque",
+            10);
 
-        // ==============================
-        // 控制频率：100 Hz
-        // dt = 10 ms
-        // ==============================
+        // 1000 Hz 发布测试输入
         timer_ = this->create_wall_timer(
-            10ms,
+            1ms,
             std::bind(
-                &TorqueSource::publish_torque,
+                &TorqueSource::publishTorque,
                 this));
 
         RCLCPP_INFO(
             this->get_logger(),
             "Torque source started.");
-
-        RCLCPP_INFO(
-            this->get_logger(),
-            "Control frequency: 100 Hz");
     }
 
 private:
-
-    void publish_torque()
+    void publishTorque()
     {
-        constexpr double dt = 0.01;  // 10 ms
+        constexpr double dt = 0.001;  // 1 ms
 
         elapsed_time_ += dt;
 
+        // 30 秒一个周期
+        double t = elapsed_time_;
+
+        if (t >= 30.0)
+        {
+            elapsed_time_ = 0.0;
+            t = 0.0;
+        }
+
         double torque = 0.0;
 
-        // =====================================
-        // 测试信号
-        //
-        // 0 ~ 2 s   :  0 N·m
-        // 2 ~ 5 s   : +1 N·m
-        // 5 ~ 7 s   :  0 N·m
-        // 7 ~ 10 s  : -1 N·m
-        // 10 s以后  : 0 N·m
-        // =====================================
+        /*
+         * 30 秒循环阶跃输入：
+         *
+         * 0  ~ 5 s   :  0 Nm
+         * 5  ~ 15 s  : +1 Nm
+         * 15 ~ 20 s  :  0 Nm
+         * 20 ~ 30 s  : -1 Nm
+         *
+         * 30 s 后重新开始
+         */
 
-        if (elapsed_time_ >= 2.0 &&
-            elapsed_time_ < 5.0)
+        if (t >= 5.0 && t < 15.0)
         {
             torque = 1.0;
         }
-        else if (elapsed_time_ >= 7.0 &&
-                 elapsed_time_ < 10.0)
+        else if (t >= 20.0 && t < 30.0)
         {
             torque = -1.0;
         }
-        else
-        {
-            torque = 0.0;
-        }
 
-        // 发布控制力矩
-        std_msgs::msg::Float64 torque_msg;
-        torque_msg.data = torque;
+        std_msgs::msg::Float64 msg;
+        msg.data = torque;
 
-        torque_publisher_->publish(torque_msg);
+        torque_pub_->publish(msg);
     }
 
-    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr
-        torque_publisher_;
-
-    rclcpp::TimerBase::SharedPtr timer_;
-
     double elapsed_time_;
-};
 
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr torque_pub_;
+    rclcpp::TimerBase::SharedPtr timer_;
+};
 
 int main(int argc, char * argv[])
 {
     rclcpp::init(argc, argv);
 
-    auto node =
-        std::make_shared<TorqueSource>();
+    auto node = std::make_shared<TorqueSource>();
 
     rclcpp::spin(node);
 
