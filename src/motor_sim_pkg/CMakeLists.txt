@@ -34,10 +34,18 @@ ament_target_dependencies(target_velocity rclcpp std_msgs)
 add_executable(torque_source src/torque_source.cpp)
 ament_target_dependencies(torque_source rclcpp std_msgs)
 
+add_executable(target_angle src/target_angle.cpp)
+ament_target_dependencies(target_angle rclcpp std_msgs)
+
+add_executable(double_pid_controller src/double_pid_controller.cpp)
+ament_target_dependencies(double_pid_controller rclcpp std_msgs)
+
 install(TARGETS
   motor_simulator
   pid_controller
   target_velocity
+  target_angle
+  double_pid_controller
   DESTINATION lib/${PROJECT_NAME}
 )
 
