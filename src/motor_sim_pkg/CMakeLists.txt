@@ -25,12 +25,19 @@ endif()
 add_executable(motor_simulator src/motor_simulator.cpp)
 ament_target_dependencies(motor_simulator rclcpp std_msgs)
 
+add_executable(pid_controller src/pid_controller.cpp)
+ament_target_dependencies(pid_controller rclcpp std_msgs)
+
+add_executable(target_velocity src/target_velocity.cpp)
+ament_target_dependencies(target_velocity rclcpp std_msgs)
+
 add_executable(torque_source src/torque_source.cpp)
 ament_target_dependencies(torque_source rclcpp std_msgs)
 
 install(TARGETS
   motor_simulator
-  torque_source
+  pid_controller
+  target_velocity
   DESTINATION lib/${PROJECT_NAME}
 )
 
