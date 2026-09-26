@@ -99,7 +99,11 @@ add_executable(motor_control_node
   src/motor_control_node.cpp
 )
 
-target_include_directories(motor_control_node PUBLIC include)
+target_include_directories(motor_control_node PUBLIC
+  include
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../RMCS/rmcs_ws/src/rmcs_core/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../RMCS/rmcs_ws/src/rmcs_msgs/include
+)
 
 target_link_libraries(motor_control_node
   pid
@@ -109,4 +113,11 @@ target_link_libraries(motor_control_node
   gm6020_hardware
   can_interface
   lowpass_filter
+  uart_interface
 )
+
+add_library(uart_interface
+  src/uart_interface.cpp
+)
+
+target_include_directories(uart_interface PUBLIC include)

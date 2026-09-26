@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "motor_input.hpp"
+#include "can_packet.hpp"
 
 class GM6020Hardware : public MotorInput
 {
@@ -28,6 +29,9 @@ public:
 
     // 生成发送给电机的原始电流指令
     std::int16_t generate_command() const;
+
+    void write_command_to_packet(
+    CanPacket8& packet) const;
 
     std::uint8_t id() const;
 

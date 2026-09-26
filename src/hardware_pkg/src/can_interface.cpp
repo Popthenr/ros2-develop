@@ -1,6 +1,7 @@
 #include "can_interface.hpp"
 
 #include <cstring>
+#include <fcntl.h>
 
 #include <linux/can.h>
 #include <linux/can/raw.h>
@@ -60,6 +61,26 @@ bool CanInterface::open(
             socket_fd_,
             reinterpret_cast<struct sockaddr*>(&address),
             sizeof(address)) < 0)
+    {
+        close();
+        return false;
+    }
+
+    int flags = fcntl(
+        socket_fd_,
+        F_GETFL,
+        0);
+
+    if (flags < 0)
+    {
+        close();
+        return false;
+    }
+
+    if (fcntl(
+            socket_fd_,
+            F_SETFL,
+            flags | O_NONBLOCK) < 0)
     {
         close();
         return false;

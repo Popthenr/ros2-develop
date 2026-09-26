@@ -92,6 +92,7 @@ void GM6020Hardware::update_status()
 
 std::int16_t GM6020Hardware::generate_command() const
 {
+
     /*
      * PID output:
      *
@@ -125,6 +126,25 @@ std::int16_t GM6020Hardware::generate_command() const
 
     return static_cast<std::int16_t>(
         std::round(raw_current));
+}
+
+void GM6020Hardware::write_command_to_packet(
+    CanPacket8& packet) const
+{
+    const std::int16_t raw_current =
+        generate_command();
+
+    const std::size_t index =
+        static_cast<std::size_t>(
+            (id_ - 1) % 4);
+
+    packet[index * 2] =
+        static_cast<std::uint8_t>(
+            (raw_current >> 8) & 0xFF);
+
+    packet[index * 2 + 1] =
+        static_cast<std::uint8_t>(
+            raw_current & 0xFF);
 }
 
 std::uint8_t GM6020Hardware::id() const
