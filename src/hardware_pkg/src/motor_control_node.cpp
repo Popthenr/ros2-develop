@@ -1,270 +1,525 @@
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <thread>
 
+#include <librmcs/board/c_board.hpp>
+#include <librmcs/data/datas.hpp>
+
 #include "hardware/device/dr16.hpp"
-#include "pid_controller.hpp"
+
 #include "gm6020_hardware.hpp"
 #include "lowpass_filter.hpp"
-#include "can_interface.hpp"
-#include "can_packet.hpp"
-#include "uart_interface.hpp"
+#include "pid_controller.hpp"
 
-int main()
+
+using namespace std::chrono_literals;
+
+
+class MotorControlSystem
+    : public librmcs::board::CBoard::Callback
 {
-    // =========================
-    // 1. 创建各个硬件/控制模块
-    // =========================
+public:
 
-    rmcs_core::hardware::device::Dr16 dr16;
-
-    GM6020Hardware motor(1);
-
-    CanInterface can;
-
-    UartInterface uart;
-
-    PidController position_pid(
-        1.0,
-        0.0,
-        0.0);
-
-    PidController speed_pid(
-        0.5,
-        1.0,
-        0.001);
-
-    LowPassFilter speed_filter(0.1);
-
-
-    // =========================
-    // 2. 控制参数
-    // =========================
-
-    const double dt = 0.001;
-
-    // 摇杆满量程对应的目标速度
-    // 单位：rad/s
-    const double max_velocity = 10.0;
-
-    // 目标角度
-    double target_angle = 0.0;
-
-
-    // =========================
-    // 3. 打开 CAN
-    // =========================
-
-    if (!can.open("can0"))
+    MotorControlSystem()
+        : dr16_(),
+          motor_(1),
+          position_pid_(8.0, 0.0, 0.0),
+          speed_pid_(0.02, 0.0, 0.0),
+          speed_filter_(0.1)
     {
-        std::cerr
-            << "Failed to open CAN interface\n";
-
-        return 1;
     }
 
-    if (!uart.open(
-        "/dev/ttyUSB0",
-        100000))
-{
-    std::cerr
-        << "Failed to open DR16 UART\n";
 
-    return 1;
-}
+    // ============================================================
+    // 启动 C Board
+    // ============================================================
 
-
-    // =========================
-    // 4. 控制循环
-    // =========================
-
-    while (true)
+    void start()
     {
-        // -------------------------
-        // 4.1 更新 DR16 状态
-        // -------------------------
+        board_ =
+            std::make_unique<
+                librmcs::board::CBoard>(*this);
 
-        std::byte dr16_data[18]{};
 
-        if (uart.read(
-                dr16_data,
-                sizeof(dr16_data)))
+        std::cout
+            << "Motor control system started."
+            << '\n';
+
+        std::cout
+            << "GM6020 ID = "
+            << static_cast<int>(motor_.id())
+            << '\n';
+
+        std::cout
+            << "GM6020 RX CAN ID = 0x"
+            << std::hex
+            << motor_.recv_id()
+            << std::dec
+            << '\n';
+
+        std::cout
+            << "GM6020 TX CAN ID = 0x"
+            << std::hex
+            << motor_.send_id()
+            << std::dec
+            << '\n';
+    }
+
+
+    // ============================================================
+    // 1 kHz 控制循环
+    // ============================================================
+
+    void update()
+    {
+        constexpr double dt = 0.001;
+
+
+        // ========================================================
+        // 1. 更新 DR16
+        // ========================================================
+
+        dr16_.update_status();
+
+        const bool dr16_valid =
+            dr16_.valid();
+
+
+        // ========================================================
+        // 2. 读取右摇杆
+        // ========================================================
+
+        /*
+         * RMCS:
+         *
+         * physical right  -> joystick_y < 0
+         * physical left   -> joystick_y > 0
+         *
+         * 所以反号：
+         *
+         * physical right  -> positive
+         * physical left   -> negative
+         */
+
+        const double joystick_y =
+            dr16_.joystick_right().y();
+
+        const double joystick_horizontal =
+            -joystick_y;
+
+        constexpr double kMaxTargetSpeed =
+            10.0;
+
+        // 摇杆死区
+        constexpr double kJoystickDeadzone =
+            0.05;
+
+        double target_velocity = 0.0;
+
+        if (dr16_valid)
         {
-            dr16.store_status(
-                dr16_data,
-                sizeof(dr16_data));
-        }
-
-        dr16.update_status();
-
-        const double joystick_x =
-            dr16.joystick_right().x();
-
-
-        // -------------------------
-        // 4.2 摇杆 → 目标速度
-        // -------------------------
-
-        const double target_velocity =
-            joystick_x * max_velocity;
-
-
-        // -------------------------
-        // 4.3 目标速度 → 目标角度
-        // -------------------------
-
-        target_angle +=
-            target_velocity * dt;
-
-
-        // -------------------------
-        // 4.4 接收 GM6020 CAN 数据
-        // -------------------------
-
-        std::uint32_t can_id;
-
-        CanPacket8 rx_packet;
-
-        if (can.receive(
-                can_id,
-                rx_packet))
-        {
-            if (can_id == motor.recv_id())
+        if (std::abs(joystick_horizontal) >
+            kJoystickDeadzone)
             {
-                motor.store_status(
-                    rx_packet.data.data(),
-                    rx_packet.data.size());
-
-                motor.update_status();
+              target_velocity =
+                    joystick_horizontal
+                    * kMaxTargetSpeed;
+            }
+        else
+            {
+            target_velocity = 0.0;
             }
         }
 
+        if (target_angle_initialized_)
+        {
+        target_angle_ +=
+            target_velocity * dt;
+        }
 
-        // -------------------------
-        // 4.5 获取电机反馈
-        // -------------------------
+
+        // ========================================================
+        // 5. 读取 GM6020 当前状态
+        // ========================================================
 
         const double actual_angle =
-            motor.angle();
+            motor_.angle();
+
 
         const double actual_speed =
-            motor.speed();
+            speed_filter_.update(
+                motor_.speed());
 
 
-        // -------------------------
-        // 4.6 速度低通滤波
-        // -------------------------
+        // ========================================================
+        // 6. 外环：位置 PID
+        // ========================================================
 
-        const double filtered_speed =
-            speed_filter.update(
-                actual_speed);
+        double target_speed = 0.0;
 
 
-        // -------------------------
-        // 4.7 位置环
-        //
-        // 目标角度
-        //     ↓
-        // Position PID
-        //     ↓
-        // 目标速度
-        // -------------------------
-
-        const double target_speed =
-            position_pid.update(
-                target_angle,
-                actual_angle,
-                dt);
-
-
-        // -------------------------
-        // 4.8 速度环
-        //
-        // 目标速度
-        //     ↓
-        // Speed PID
-        //     ↓
-        // 扭矩
-        // -------------------------
-
-        const double torque =
-            speed_pid.update(
-                target_speed,
-                filtered_speed,
-                dt);
-
-
-        // -------------------------
-        // 4.9 将扭矩交给 GM6020
-        // -------------------------
-
-        motor.set_command(
-            torque);
-
-
-        // -------------------------
-        // 4.10 扭矩 → GM6020 原始电流
-        // -------------------------
-
-        CanPacket8 tx_packet;
-
-        motor.write_command_to_packet(
-            tx_packet);
-
-        // -------------------------
-        // 4.12 发送 CAN
-        // -------------------------
-
-        can.send(
-            motor.send_id(),
-            tx_packet);
-
-
-        // -------------------------
-        // 4.13 调试输出
-        // -------------------------
-
-        static int print_count = 0;
-
-        ++print_count;
-
-        if (print_count >= 100)
+        if (target_angle_initialized_)
         {
-            print_count = 0;
+            target_speed =
+                position_pid_.update(
+                    target_angle_,
+                    actual_angle,
+                    dt);
+        }
+
+
+        // ========================================================
+        // 7. 内环：速度 PID
+        // ========================================================
+
+        double torque = 0.3;
+
+
+        if (target_angle_initialized_)
+        {
+            torque =
+                speed_pid_.update(
+                    target_speed,
+                    actual_speed,
+                    dt);
+        }
+
+
+        // ========================================================
+        // 8. 限制 torque
+        // ========================================================
+
+        constexpr double kMaxTorque =
+            2.0;
+
+
+        if (torque > kMaxTorque)
+        {
+            torque = kMaxTorque;
+        }
+
+        if (torque < -kMaxTorque)
+        {
+            torque = -kMaxTorque;
+        }
+
+
+        // ========================================================
+        // 9. CAN 发送
+        // ========================================================
+        //
+        // 控制算法：
+        // 1 kHz
+        //
+        // CAN：
+        // 100 Hz
+        //
+        // 防止 CBoard transmit buffer 被连续占满。
+        // ========================================================
+
+        static int send_count = 0;
+
+        ++send_count;
+
+
+        if (send_count >= 10)
+        {
+            send_count = 0;
+
+
+            motor_.set_command(
+                torque);
+
+
+            send_motor_command();
+        }
+
+
+        // ========================================================
+        // 10. 调试信息
+        // ========================================================
+
+        static int debug_count = 0;
+
+        ++debug_count;
+
+
+        if (debug_count >= 100)
+        {
+            debug_count = 0;
+
 
             std::cout
-                << "joystick = "
-                << joystick_x
+                << "DR16="
+                << dr16_valid
 
-                << " | target_velocity = "
+                << " | joystick="
+                << joystick_horizontal
+
+                << " | target_vel="
                 << target_velocity
 
-                << " | target_angle = "
-                << target_angle
+                << " | target_angle="
+                << target_angle_
 
-                << " | actual_angle = "
+                << " | actual_angle="
                 << actual_angle
 
-                << " | target_speed = "
+                << " | actual_speed="
+                << actual_speed
+
+                << " | target_speed="
                 << target_speed
 
-                << " | speed = "
-                << filtered_speed
-
-                << " | torque = "
+                << " | torque="
                 << torque
 
                 << '\n';
         }
+    }
 
 
-        // -------------------------
-        // 4.14 等待 1 ms
-        // -------------------------
+private:
+
+    // ============================================================
+    // DR16 UART 接收
+    // ============================================================
+
+    void uart_receive_callback(
+        const Spec::Uart& uart,
+        const View::Uart& data) override
+    {
+        if (uart != Spec::kUarts.kDbus)
+        {
+            return;
+        }
+
+
+        dr16_.store_status(
+            data.uart_data.data(),
+            data.uart_data.size());
+    }
+
+
+    // ============================================================
+    // CAN 接收
+    // ============================================================
+
+    void can_receive_callback(
+        const Spec::Can& can,
+        const View::Can& data) override
+    {
+        // 只处理 CAN1
+        if (can != Spec::kCans.kCan1)
+        {
+            return;
+        }
+
+        std::cout
+            << "CAN RX ID = 0x"
+            << std::hex
+            << data.can_id
+            << std::dec
+            << " | len = "
+            << data.can_data.size()
+            << '\n';
+
+
+        // ========================================================
+        // 只接受 GM6020 ID3
+        //
+        // GM6020 ID3:
+        //
+        // 0x204 + 3 = 0x207
+        //
+        // 其他 CAN ID，例如 0x203：
+        // 直接忽略。
+        // ========================================================
+
+        if (data.can_id != motor_.recv_id())
+        {
+            return;
+        }
+
+
+        // GM6020 feedback 必须 8 bytes
+        if (data.can_data.size() != 8)
+        {
+            return;
+        }
+
+
+        std::array<std::uint8_t, 8> raw_data{};
+
+
+        for (std::size_t i = 0; i < 8; ++i)
+        {
+            raw_data[i] =
+                static_cast<std::uint8_t>(
+                    data.can_data[i]);
+        }
+
+
+        // 保存反馈
+        motor_.store_status(
+            raw_data.data(),
+            raw_data.size());
+
+
+        // 解析反馈
+        motor_.update_status();
+
+
+        // ========================================================
+        // 第一次收到 GM6020 反馈
+        // ========================================================
+
+        if (!target_angle_initialized_)
+        {
+            target_angle_ =
+                motor_.angle();
+
+
+            target_angle_initialized_ =
+                true;
+
+
+            std::cout
+                << "GM6020 feedback detected."
+                << " CAN ID = 0x"
+                << std::hex
+                << data.can_id
+                << std::dec
+                << " | initial angle = "
+                << motor_.angle()
+                << '\n';
+        }
+    }
+
+
+    // ============================================================
+    // 发送 GM6020 控制帧
+    // ============================================================
+
+    void send_motor_command()
+    {
+        // 必须初始化
+        CanPacket8 packet{};
+
+
+        /*
+         * GM6020 ID3:
+         *
+         * CAN ID = 0x1FE
+         *
+         * DATA[4] = current high byte
+         * DATA[5] = current low byte
+         */
+
+        motor_.write_command_to_packet(
+            packet);
+
+
+        std::array<std::byte, 8> can_data{};
+
+
+        for (std::size_t i = 0; i < 8; ++i)
+        {
+            can_data[i] =
+                static_cast<std::byte>(
+                    packet[i]);
+        }
+
+
+        librmcs::data::CanDataView data{
+            motor_.send_id(),
+            std::span<const std::byte>(
+                can_data.data(),
+                can_data.size())
+        };
+
+
+        board_->start_transmit()
+            .can_transmit(
+                Spec::kCans.kCan1,
+                data);
+    }
+
+
+private:
+
+    // ============================================================
+    // DR16
+    // ============================================================
+
+    rmcs_core::hardware::device::Dr16 dr16_;
+
+
+    // ============================================================
+    // GM6020 ID3
+    // ============================================================
+
+    GM6020Hardware motor_;
+
+
+    // ============================================================
+    // 外环：位置 PID
+    // ============================================================
+
+    PidController position_pid_;
+
+
+    // ============================================================
+    // 内环：速度 PID
+    // ============================================================
+
+    PidController speed_pid_;
+
+
+    // ============================================================
+    // 速度低通滤波
+    // ============================================================
+
+    LowPassFilter speed_filter_;
+
+
+    // ============================================================
+    // 目标角度
+    // ============================================================
+
+    double target_angle_ = 0.0;
+
+    bool target_angle_initialized_ = false;
+
+
+    // ============================================================
+    // C Board
+    // ============================================================
+
+    std::unique_ptr<
+        librmcs::board::CBoard>
+        board_;
+};
+
+
+int main()
+{
+    MotorControlSystem system;
+
+
+    system.start();
+
+
+    while (true)
+    {
+        system.update();
 
         std::this_thread::sleep_for(
-            std::chrono::milliseconds(1));
+            1ms);
     }
 
 
