@@ -1,4 +1,4 @@
-#include "gm6020_hardware.hpp"
+#include "m2006_hardware.hpp"
 
 #include <algorithm>
 #include <cmath>

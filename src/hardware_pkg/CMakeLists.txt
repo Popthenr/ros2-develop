@@ -4,6 +4,10 @@ project(hardware_pkg)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
+
+add_compile_options(-fno-lto)
+add_link_options(-fno-lto)
 
 add_executable(motor_control_node
     src/motor_control_node.cpp
@@ -11,12 +15,15 @@ add_executable(motor_control_node
     src/pid_controller.cpp
     src/errorpid_controller.cpp
     src/motor_input.cpp
-    src/gm6020_hardware.cpp
+    src/m2006_hardware.cpp
     src/lowpass_filter.cpp
 )
 
 target_include_directories(motor_control_node PUBLIC
     include
+    /usr/include/eigen3
+
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../RMCS/rmcs_ws/src/rmcs_msgs/include
 
     ${CMAKE_CURRENT_SOURCE_DIR}/../../RMCS/rmcs_ws/src/rmcs_core/src
 
